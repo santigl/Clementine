@@ -203,7 +203,8 @@ MainWindow::MainWindow(Application* app, SystemTrayIcon* tray_icon, OSD* osd,
       }),
       equalizer_(new Equalizer),
       organise_dialog_([=]() {
-        OrganiseDialog* dialog = new OrganiseDialog(app->task_manager());
+        OrganiseDialog* dialog = new OrganiseDialog(app->task_manager(),
+                                                    app->library_backend());
         dialog->SetDestinationModel(app->library()->model()->directory_model());
         return dialog;
       }),
@@ -675,7 +676,13 @@ MainWindow::MainWindow(Application* app, SystemTrayIcon* tray_icon, OSD* osd,
   ui_->playlist->addAction(playlist_queue_);
   playlist_skip_ = playlist_menu_->addAction("", this, SLOT(PlaylistSkip()));
   ui_->playlist->addAction(playlist_skip_);
-
+  playlist_menu_->addSeparator();
+  search_for_artist_ = playlist_menu_->addAction(
+      IconLoader::Load("system-search", IconLoader::Base),
+      tr("Search for artist"), this, SLOT(SearchForArtist()));
+  search_for_album_ = playlist_menu_->addAction(
+      IconLoader::Load("system-search", IconLoader::Base),
+      tr("Search for album"), this, SLOT(SearchForAlbum()));
   playlist_menu_->addSeparator();
   playlist_menu_->addAction(ui_->action_remove_from_playlist);
   playlist_undoredo_ = playlist_menu_->addSeparator();
@@ -848,6 +855,8 @@ MainWindow::MainWindow(Application* app, SystemTrayIcon* tray_icon, OSD* osd,
 
   connect(global_shortcuts_, SIGNAL(RateCurrentSong(int)),
           app_->playlist_manager(), SLOT(RateCurrentSong(int)));
+  connect(global_shortcuts_, SIGNAL(RemoveCurrentSong()),
+          app_->playlist_manager(), SLOT(RemoveCurrentSong()));
 
   // Fancy tabs
   connect(ui_->tabs, SIGNAL(ModeChanged(FancyTabWidget::Mode)),
@@ -1064,9 +1073,9 @@ void MainWindow::ReloadSettings() {
       AddBehaviour(s.value("doubleclick_addmode", AddBehaviour_Append).toInt());
   doubleclick_playmode_ = PlayBehaviour(
       s.value("doubleclick_playmode", PlayBehaviour_IfStopped).toInt());
-  doubleclick_playlist_addmode_ = PlaylistAddBehaviour(
-      s.value("doubleclick_playlist_addmode", PlaylistAddBehaviour_Play)
-          .toInt());
+  doubleclick_playlist_addmode_ =
+      PlaylistAddBehaviour(s.value("doubleclick_playlist_addmode",
+                                   PlaylistAddBehaviour_Play).toInt());
   menu_playmode_ =
       PlayBehaviour(s.value("menu_playmode", PlayBehaviour_IfStopped).toInt());
 
@@ -1730,6 +1739,9 @@ void MainWindow::PlaylistRightClick(const QPoint& global_pos,
   playlist_delete_->setVisible(false);
   playlist_copy_to_device_->setVisible(false);
 
+  search_for_artist_->setVisible(all == 1);
+  search_for_album_->setVisible(all == 1);
+
   if (in_queue == 1 && not_in_queue == 0)
     playlist_queue_->setText(tr("Dequeue track"));
   else if (in_queue > 1 && not_in_queue == 0)
@@ -2012,9 +2024,9 @@ void MainWindow::AddFile() {
   // Show dialog
   QStringList file_names = QFileDialog::getOpenFileNames(
       this, tr("Add file"), directory,
-      QString("%1 (%2);;%3;;%4")
-          .arg(tr("Music"), FileView::kFileFilter, parser.filters(),
-               tr(kAllFilesFilterSpec)));
+      QString("%1 (%2);;%3;;%4").arg(tr("Music"), FileView::kFileFilter,
+                                     parser.filters(),
+                                     tr(kAllFilesFilterSpec)));
   if (file_names.isEmpty()) return;
 
   // Save last used directory
@@ -2113,7 +2125,7 @@ void MainWindow::ShowInLibrary() {
 }
 
 void MainWindow::PlaylistRemoveCurrent() {
-  ui_->playlist->view()->RemoveSelected();
+  ui_->playlist->view()->RemoveSelected(false);
 }
 
 void MainWindow::PlaylistEditFinished(const QModelIndex& index) {
@@ -2138,6 +2150,8 @@ void MainWindow::CommandlineOptionsReceived(
 }
 
 void MainWindow::CommandlineOptionsReceived(const CommandlineOptions& options) {
+  qLog(Debug) << "command line options received";
+  
   switch (options.player_action()) {
     case CommandlineOptions::Player_Play:
       if (options.urls().empty()) {
@@ -2217,6 +2231,33 @@ void MainWindow::CommandlineOptionsReceived(const CommandlineOptions& options) {
   if (options.play_track_at() != -1)
     app_->player()->PlayAt(options.play_track_at(), Engine::Manual, true);
 
+  qLog(Debug) << options.delete_current_track();
+
+  // Just pass the url of the currently playing 
+  if (options.delete_current_track()) {
+    qLog(Debug) << "deleting current track";
+    
+    Playlist* activePlaylist = app_->playlist_manager()->active();
+    PlaylistItemPtr playlistItemPtr = activePlaylist->current_item();
+
+    if (playlistItemPtr) {
+      const QUrl& url = playlistItemPtr->Url();
+      qLog(Debug) << url;
+      
+      std::shared_ptr<MusicStorage> storage(new FilesystemMusicStorage("/"));  
+      
+      app_->player()->Next();
+        
+      DeleteFiles* delete_files = new DeleteFiles(app_->task_manager(), storage);
+      connect(delete_files, SIGNAL(Finished(SongList)),
+              SLOT(DeleteFinished(SongList)));
+      delete_files->Start(url);
+
+    } else {
+      qLog(Debug) << "no currently playing track to delete";
+    }
+  }
+  
   if (options.show_osd()) app_->player()->ShowOSD();
 
   if (options.toggle_pretty_osd()) app_->player()->TogglePrettyOSD();
@@ -2387,7 +2428,20 @@ void MainWindow::PlaylistDelete() {
                           ->Metadata();
   }
 
-  ui_->playlist->view()->RemoveSelected();
+  if (app_->player()->GetState() == Engine::Playing) {
+    if (app_->playlist_manager()->current()->rowCount() ==
+        selected_songs.length()) {
+      app_->player()->Stop();
+    } else {
+      for (Song x : selected_songs) {
+        if (x == app_->player()->GetCurrentItem()->Metadata()) {
+          app_->player()->Next();
+        }
+      }
+    }
+  }
+
+  ui_->playlist->view()->RemoveSelected(true);
 
   DeleteFiles* delete_files = new DeleteFiles(app_->task_manager(), storage);
   connect(delete_files, SIGNAL(Finished(SongList)),
@@ -2412,7 +2466,16 @@ void MainWindow::PlaylistOpenInBrowser() {
 }
 
 void MainWindow::DeleteFinished(const SongList& songs_with_errors) {
-  if (songs_with_errors.isEmpty()) return;
+  if (songs_with_errors.isEmpty()) {
+    qLog(Debug) << "Finished deleting songs";
+    Playlist* activePlaylist = app_->playlist_manager()->active();
+    if (activePlaylist->id() != -1) {
+      activePlaylist->RemoveUnavailableSongs();
+      qLog(Debug) << "Found active playlist and removed unavailable songs";
+    }
+    
+    return;
+  } 
 
   OrganiseErrorDialog* dialog = new OrganiseErrorDialog(this);
   dialog->Show(OrganiseErrorDialog::Type_Delete, songs_with_errors);
@@ -2465,6 +2528,26 @@ void MainWindow::PlaylistCopyToDevice() {
     QMessageBox::warning(
         this, tr("Error"),
         tr("None of the selected songs were suitable for copying to a device"));
+  }
+}
+
+void MainWindow::SearchForArtist() {
+  PlaylistItemPtr item(
+      app_->playlist_manager()->current()->item_at(playlist_menu_index_.row()));
+  Song song = item->Metadata();
+  if (!song.albumartist().isEmpty()) {
+    DoGlobalSearch(song.albumartist().simplified());
+  } else if (!song.artist().isEmpty()) {
+    DoGlobalSearch(song.artist().simplified());
+  }
+}
+
+void MainWindow::SearchForAlbum() {
+  PlaylistItemPtr item(
+      app_->playlist_manager()->current()->item_at(playlist_menu_index_.row()));
+  Song song = item->Metadata();
+  if (!song.album().isEmpty()) {
+    DoGlobalSearch(song.album().simplified());
   }
 }
 
@@ -2855,12 +2938,6 @@ void MainWindow::ShowConsole() {
 void MainWindow::keyPressEvent(QKeyEvent* event) {
   if (event->key() == Qt::Key_Space) {
     app_->player()->PlayPause();
-    event->accept();
-  } else if (event->key() == Qt::Key_Left) {
-    app_->player()->SeekBackward();
-    event->accept();
-  } else if (event->key() == Qt::Key_Right) {
-    app_->player()->SeekForward();
     event->accept();
   } else {
     QMainWindow::keyPressEvent(event);

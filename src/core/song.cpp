@@ -130,7 +130,8 @@ const QStringList Song::kFtsColumns = QStringList() << "ftstitle"
                                                     << "ftsperformer"
                                                     << "ftsgrouping"
                                                     << "ftsgenre"
-                                                    << "ftscomment";
+                                                    << "ftscomment"
+                                                    << "ftsyear";
 
 const QString Song::kFtsColumnSpec = Song::kFtsColumns.join(", ");
 const QString Song::kFtsBindSpec =
@@ -407,7 +408,7 @@ QString Song::TextForFiletype(FileType type) {
     case Song::Type_Asf:
       return QObject::tr("Windows Media audio");
     case Song::Type_Flac:
-      return QObject::tr("Flac");
+      return QObject::tr("FLAC");
     case Song::Type_Mp4:
       return QObject::tr("MP4 AAC");
     case Song::Type_Mpc:
@@ -415,7 +416,7 @@ QString Song::TextForFiletype(FileType type) {
     case Song::Type_Mpeg:
       return QObject::tr("MP3");  // Not technically correct
     case Song::Type_OggFlac:
-      return QObject::tr("Ogg Flac");
+      return QObject::tr("Ogg FLAC");
     case Song::Type_OggSpeex:
       return QObject::tr("Ogg Speex");
     case Song::Type_OggVorbis:
@@ -581,7 +582,7 @@ void Song::ToProtobuf(pb::tagreader::SongMetadata* pb) const {
   pb->set_filesize(d->filesize_);
   pb->set_suspicious_tags(d->suspicious_tags_);
   pb->set_art_automatic(DataCommaSizeFromQString(d->art_automatic_));
-  pb->set_type(static_cast<::pb::tagreader::SongMetadata_Type>(d->filetype_));
+  pb->set_type(static_cast<pb::tagreader::SongMetadata_Type>(d->filetype_));
 }
 
 void Song::InitFromQuery(const SqlRow& q, bool reliable_metadata, int col) {
@@ -936,8 +937,9 @@ void Song::BindToQuery(QSqlQuery* query) const {
 
   if (Application::kIsPortable &&
       Utilities::UrlOnSameDriveAsClementine(d->url_)) {
-    query->bindValue(":filename", Utilities::GetRelativePathToClementineBin(
-                                      d->url_).toEncoded());
+    query->bindValue(
+        ":filename",
+        Utilities::GetRelativePathToClementineBin(d->url_).toEncoded());
   } else {
     query->bindValue(":filename", d->url_.toEncoded());
   }
@@ -995,6 +997,7 @@ void Song::BindToFtsQuery(QSqlQuery* query) const {
   query->bindValue(":ftsgrouping", d->grouping_);
   query->bindValue(":ftsgenre", d->genre_);
   query->bindValue(":ftscomment", d->comment_);
+  query->bindValue(":ftsyear", d->year_);
 }
 
 #ifdef HAVE_LIBLASTFM
@@ -1127,13 +1130,14 @@ bool Song::IsOnSameAlbum(const Song& other) const {
 
   if (is_compilation() && album() == other.album()) return true;
 
-  return effective_album() == other.effective_album() && 
-    effective_albumartist() == other.effective_albumartist();
+  return effective_album() == other.effective_album() &&
+         effective_albumartist() == other.effective_albumartist();
 }
 
 QString Song::AlbumKey() const {
-  return QString("%1|%2|%3").arg(is_compilation() ? "_compilation" : effective_albumartist(),
-                                 has_cue() ? cue_path() : "", effective_album());
+  return QString("%1|%2|%3")
+      .arg(is_compilation() ? "_compilation" : effective_albumartist(),
+           has_cue() ? cue_path() : "", effective_album());
 }
 
 void Song::ToXesam(QVariantMap* map) const {

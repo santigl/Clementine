@@ -22,6 +22,7 @@
 
 #include "metatypes.h"
 
+#include <QFileInfo>
 #include <QMetaType>
 #include <QNetworkCookie>
 
@@ -80,6 +81,8 @@ void RegisterMetaTypes() {
       "PlaylistSequence::RepeatMode");
   qRegisterMetaType<PlaylistSequence::ShuffleMode>(
       "PlaylistSequence::ShuffleMode");
+  qRegisterMetaType<QAbstractSocket::SocketState>(
+      "QAbstractSocket::SocketState");
   qRegisterMetaType<QList<PodcastEpisode>>("QList<PodcastEpisode>");
   qRegisterMetaType<QList<Podcast>>("QList<Podcast>");
   qRegisterMetaType<QList<QNetworkCookie>>("QList<QNetworkCookie>");
@@ -107,6 +110,7 @@ void RegisterMetaTypes() {
   qRegisterMetaType<SubdirectoryList>("SubdirectoryList");
   qRegisterMetaType<Subdirectory>("Subdirectory");
   qRegisterMetaType<QList<QUrl>>("QList<QUrl>");
+  qRegisterMetaType<QFileInfo>("QFileInfo");
 
 #ifdef HAVE_DBUS
   qDBusRegisterMetaType<QImage>();
